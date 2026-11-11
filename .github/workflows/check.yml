@@ -1,0 +1,40 @@
+name: Installer checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -v
+      - name: Check Shell launchers
+        if: runner.os != 'Windows'
+        shell: sh
+        run: |
+          sh -n install.sh
+          sh -n scripts/docker/install.sh
+          ./install.sh doctor
+          ./install.sh list
+      - name: Check PowerShell launchers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File ./install.ps1 doctor
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File ./install.ps1 list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File ./scripts/docker/install.ps1 --help
