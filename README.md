@@ -4,7 +4,7 @@ macOS 优先的 Docker、Compose 和常用工具安装器。默认使用 Colima�
 
 ## macOS 快速开始
 
-下面是一条完整命令。将最后两个参数换成可信发布渠道提供的压缩包 HTTPS 地址和 SHA-256。命令先校验整包，再解压并安装 Docker、Compose，最后运行测试容器。
+将下面整段复制到 macOS「终端」执行。命令先校验固定版本的源码压缩包，再安装 Docker 和 Compose，最后运行测试容器。
 
 ```sh
 /bin/sh -c '
@@ -24,7 +24,7 @@ fi
 /usr/bin/tar -xzf "$tmp/source.tgz" --strip-components 1 -C "$tmp"
 shift 2
 /bin/sh "$tmp/install.sh" install docker --yes --smoke "$@"
-' oneclick 'ARCHIVE_URL' 'ARCHIVE_SHA256'
+' oneclick 'https://codeload.github.com/tuski22/oneclick-everything/tar.gz/933c3872b6a57365d00907aa8344f03347c3c7db' '637591623fba84be91f2c718ec9f5a33b785e40650b533b83dfee8fd6b757034'
 ```
 
 如果有国内分发地址，可设置 `ONECLICK_ARCHIVE_MIRROR` 为同一压缩包的 HTTPS 地址。镜像下载或校验失败时，命令改用官方地址。若两处都不可访问，可通过其他渠道取得压缩包，校验后使用下面的源码入口。Homebrew 软件包、Colima 虚拟机镜像和 Docker Hub 容器各自需要可用网络。
