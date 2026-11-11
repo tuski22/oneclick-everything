@@ -105,6 +105,17 @@ class SourceTests(unittest.TestCase):
         apply = next(i for i, c in enumerate(calls) if "--no-download" in c)
         self.assertLess(download, apply)
 
+    def test_smoke_falls_back_to_same_digest_on_official_registry(self):
+        runner = o.Runner(argparse.Namespace(context="colima", dry_run=False))
+        runner.run = Mock(side_effect=[None, None, subprocess.CalledProcessError(1, "docker"), None, None])
+        with redirect_stderr(io.StringIO()):
+            o.docker_smoke(runner, mirror_first=True)
+        commands = [call.args for call in runner.run.call_args_list]
+        self.assertEqual(commands[2][-1], f"docker.m.daocloud.io/{o.HELLO_WORLD}")
+        self.assertEqual(commands[3][-1], f"docker.io/{o.HELLO_WORLD}")
+        self.assertIn("--pull=never", commands[4])
+        self.assertEqual(commands[4][-1], commands[3][-1])
+
     def test_docker_engine_failure_is_not_success(self):
         args = argparse.Namespace(context="colima")
         with patch.object(o.subprocess, "run", side_effect=[Mock(stdout=b"2.40.0"), subprocess.TimeoutExpired("docker", 15)]) as run:

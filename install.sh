@@ -1,6 +1,30 @@
 #!/bin/sh
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+source=auto
+source_next=no
+for arg in "$@"; do
+    if [ "$source_next" = yes ]; then
+        source=$arg
+        source_next=no
+    else
+        case "$arg" in
+            --source) source_next=yes ;;
+            --source=*) source=${arg#--source=} ;;
+        esac
+    fi
+done
+if [ "$(uname -s)" = Darwin ]; then
+    if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || :)" = 1 ]; then
+        if [ "$(uname -m)" != arm64 ]; then
+            exec /usr/bin/arch -arm64 /bin/sh "$0" "$@"
+        fi
+        brew_bin=/opt/homebrew/bin
+    else
+        brew_bin=/usr/local/bin
+    fi
+    export PATH="$brew_bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"
+fi
 valid_python() {
     "$1" -c 'import sys; sys.exit(sys.version_info < (3,9))' >/dev/null 2>&1
 }
@@ -37,13 +61,20 @@ if ! find_python; then
     }
     case "$(uname -s)" in
         Darwin)
-            for dir in /opt/homebrew/bin /usr/local/bin; do PATH="$PATH:$dir"; done
-            export PATH
-            command -v brew >/dev/null 2>&1 || {
-                printf '%s\n' "请先安装 Homebrew 或 Python 3.9+，见 docs/compatibility.md。" >&2
-                exit 1
-            }
-            brew install python@3.12 ;;
+            version=$(sw_vers -productVersion)
+            [ "${version%%.*}" -ge 14 ] || { echo '需要 macOS 14 或更新版本。' >&2; exit 1; }
+            if [ ! -x "$brew_bin/brew" ]; then
+                /bin/sh "$repo/scripts/install-homebrew.sh" "$source"
+            fi
+            if [ "$source" = official ] || ! (
+                export HOMEBREW_API_DOMAIN=https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/api
+                export HOMEBREW_BOTTLE_DOMAIN=https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles
+                export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1
+                "$brew_bin/brew" install python@3.12
+            ); then
+                unset HOMEBREW_API_DOMAIN HOMEBREW_BOTTLE_DOMAIN HOMEBREW_ARTIFACT_DOMAIN
+                HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1 "$brew_bin/brew" install python@3.12
+            fi ;;
         Linux)
             if command -v apt-get >/dev/null 2>&1; then
                 admin apt-get update

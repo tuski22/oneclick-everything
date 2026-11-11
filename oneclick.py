@@ -31,6 +31,8 @@ TOOLS = {
     "jq": ("jq", "jqlang.jq", "jq", "jq"),
 }
 MODULES = ("docker", "compose", *TOOLS)
+# docker-library/repo-info, repos/hello-world/remote/latest.md (multi-platform index).
+HELLO_WORLD = "library/hello-world@sha256:c567b231f65614688711a75f31518a064258a51d442117a3e771a3a8fdba78ef"
 
 
 class Failure(Exception):
@@ -127,23 +129,29 @@ class Runner:
         self.args = args
         self.env = os.environ.copy()
 
-    def run(self, *argv, env=None):
+    def run(self, *argv, env=None, timeout=None):
         print("+", subprocess.list2cmdline(argv), flush=True)
         if not self.args.dry_run:
-            subprocess.run(argv, check=True, env=env or self.env)
+            subprocess.run(argv, check=True, env=env or self.env, timeout=timeout)
 
     def root(self, *argv):
-        self.run(*(() if os.geteuid() == 0 else ("sudo",)), *argv)
+        self.run(*(() if getattr(os, "geteuid", lambda: -1)() == 0 else ("sudo",)), *argv)
 
     def brew(self, *argv, fallback=True):
         clean = {k: v for k, v in self.env.items() if k not in
-                 {"HOMEBREW_API_DOMAIN", "HOMEBREW_BOTTLE_DOMAIN", "HOMEBREW_NO_INSTALL_FROM_API"}}
+                 {"HOMEBREW_API_DOMAIN", "HOMEBREW_BOTTLE_DOMAIN", "HOMEBREW_ARTIFACT_DOMAIN",
+                  "HOMEBREW_NO_INSTALL_FROM_API", "HOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK"}}
+        clean.update(HOMEBREW_NO_AUTO_UPDATE="1", HOMEBREW_NO_INSTALL_UPGRADE="1")
         mirror = dict(clean, HOMEBREW_API_DOMAIN=TUNA + "/homebrew-bottles/api",
                       HOMEBREW_BOTTLE_DOMAIN=TUNA + "/homebrew-bottles")
         binary = shutil.which("brew") or next((p for p in
                   ("/opt/homebrew/bin/brew", "/usr/local/bin/brew") if Path(p).is_file()), "brew")
         if not self.args.dry_run and binary == "brew":
-            raise Failure("未找到 Homebrew；先按 docs/compatibility.md 安装。")
+            script = Path(__file__).resolve().parent / "scripts/install-homebrew.sh"
+            self.run("/bin/sh", str(script), self.args.source)
+            binary = "/opt/homebrew/bin/brew" if detect().arch == "arm64" else "/usr/local/bin/brew"
+            if not Path(binary).is_file():
+                raise Failure("Homebrew 安装后仍未找到 brew。")
         if binary != "brew":
             self.env["PATH"] = str(Path(binary).parent) + os.pathsep + self.env.get("PATH", "")
             clean["PATH"] = mirror["PATH"] = self.env["PATH"]
@@ -289,6 +297,11 @@ def install_docker(r, host, choice, compose_only):
     if not a.dry_run and docker_ok(a, verify_only_compose=compose_only):
         print("Docker 检查已通过，跳过安装。")
         return
+    if choice in ("colima", "desktop") and not compose_only and not a.dry_run:
+        if optional("/usr/sbin/sysctl", "-n", "kern.hv_support") == "0":
+            raise Failure("此 Mac 环境未向 Docker 提供硬件虚拟化。")
+        if shutil.disk_usage(Path.home()).free < 10 * 1024**3:
+            raise Failure("Docker 初次安装需要至少 10 GiB 可用空间。")
     if choice in ("apt", "dnf") and not compose_only and not a.dry_run:
         if not Path("/run/systemd/system").is_dir():
             raise Failure("Docker Engine 自动安装要求 systemd 主机。")
@@ -309,12 +322,35 @@ def install_docker(r, host, choice, compose_only):
             directory = Path(os.getenv("DOCKER_CONFIG") or str(Path.home() / ".docker")) / "cli-plugins"
             directory.mkdir(parents=True, exist_ok=True)
             link = directory / "docker-compose"
-            if not link.exists() and not link.is_symlink():
+            try:
                 link.symlink_to(Path(prefix) / "bin/docker-compose")
+            except FileExistsError:
+                if link.is_symlink() and not link.exists():
+                    raise Failure(f"Compose 插件链接已失效：{link}。请检查并修复链接后重试。")
         if not compose_only:
-            r.run("colima", "start", "--runtime", "docker")
+            options = ("colima", "start", "--runtime", "docker")
+            help_text = "" if a.dry_run else optional("colima", "start", "--help")
+            if "--downloader" in help_text:
+                options += ("--downloader", "curl")
+            mirror = os.getenv("ONECLICK_COLIMA_IMAGE_MIRROR") if a.source == "auto" else None
+            if mirror and not mirror.startswith("https://"):
+                raise Failure("ONECLICK_COLIMA_IMAGE_MIRROR 必须是 HTTPS 地址。")
+            supports_mirror = a.dry_run or "--disk-image-mirror" in help_text
+            if mirror and not supports_mirror:
+                print("当前 Colima 版本不支持虚拟机镜像代理，将使用上游地址。", file=sys.stderr)
+            if mirror and supports_mirror:
+                try:
+                    r.run(*options, "--disk-image-mirror", mirror)
+                except subprocess.CalledProcessError:
+                    print("Colima 镜像启动失败，改用官方地址。", file=sys.stderr)
+                    r.run(*options, "--disk-image-mirror", "")
+            else:
+                if a.source == "official" and supports_mirror:
+                    options += ("--disk-image-mirror", "")
+                r.run(*options)
     elif choice == "desktop":
-        r.brew("install", "--cask", "docker-desktop")
+        if a.dry_run or not Path("/Applications/Docker.app/Contents/Resources/bin/docker").is_file():
+            r.brew("install", "--cask", "docker-desktop")
         if not compose_only:
             r.run("open", "-a", "Docker")
         r.env["PATH"] += os.pathsep + "/Applications/Docker.app/Contents/Resources/bin"
@@ -348,6 +384,50 @@ def install_docker(r, host, choice, compose_only):
         raise Failure("安装命令已执行，但验证未通过。请检查首次启动提示、PATH、Docker context 或 Linux socket 权限，再运行 verify。")
     else:
         print("验证通过：Compose" + ("" if compose_only else " 与 Docker Engine"))
+
+
+def repair_colima_dns(r):
+    if r.args.dry_run or not shutil.which("colima", path=r.env.get("PATH")):
+        return
+    # A Colima Ubuntu minimal image can ship a dangling systemd-resolved stub.
+    # Limit the repair to that exact state and use the VM's DHCP resolver.
+    script = r"""
+if [ "$(readlink /etc/resolv.conf)" != "../run/systemd/resolve/stub-resolv.conf" ] ||
+   [ -e /etc/resolv.conf ] || command -v resolvectl >/dev/null; then
+    exit 0
+fi
+tmp=$(mktemp /etc/oneclick-resolv.XXXXXX)
+trap 'rm -f "$tmp"' EXIT
+awk -F= '$1 == "DNS" {
+    n = split($2, servers, " ")
+    for (i = 1; i <= n; i++)
+        if (servers[i] ~ /^[0-9a-fA-F:.]+$/) print "nameserver " servers[i]
+}' /run/systemd/netif/leases/* > "$tmp"
+test -s "$tmp"
+chmod 644 "$tmp"
+mv -T "$tmp" /etc/resolv.conf
+echo '已修复 Colima 虚拟机失效的 DNS 配置。'
+"""
+    subprocess.run(("colima", "ssh", "--", "sudo", "sh", "-eu", "-c", script),
+                   env=r.env, check=True, timeout=30)
+
+
+def docker_smoke(r, mirror_first=False):
+    env = {k: v for k, v in r.env.items() if k not in ("DOCKER_HOST", "DOCKER_CONTEXT")}
+    base = ("docker", "--context", r.args.context)
+    r.run(*base, "version", env=env, timeout=20)
+    r.run(*base, "compose", "version", env=env, timeout=20)
+    registries = ("docker.m.daocloud.io", "docker.io") if mirror_first else ("docker.io",)
+    for registry in registries:
+        image = f"{registry}/{HELLO_WORLD}"
+        try:
+            r.run(*base, "pull", image, env=env, timeout=60)
+        except subprocess.SubprocessError:
+            print(f"测试镜像拉取失败：{registry}", file=sys.stderr)
+            continue
+        r.run(*base, "run", "--rm", "--pull=never", image, env=env, timeout=30)
+        return
+    raise Failure("无法拉取固定摘要的 hello-world。请检查 Docker 虚拟机 DNS 和镜像仓库网络。")
 
 
 def install_tool(r, choice, name):
@@ -385,6 +465,8 @@ def main(argv=None):
     parser.add_argument("--source", default="auto", choices=("auto", "official"),
                         help="APT Docker / Homebrew 使用国内优先或官方源")
     parser.add_argument("--context", help="覆盖 Docker 验证上下文")
+    parser.add_argument("--smoke", action="store_true",
+                        help="验证时拉取并运行 Docker Hub 的 hello-world")
     parser.add_argument("--dry-run", action="store_true", help="仅输出安装计划")
     parser.add_argument("--yes", action="store_true", help="确认执行；系统仍可能要求提权或重启")
     a = parser.parse_args(argv)
@@ -393,11 +475,20 @@ def main(argv=None):
             print("\n".join(MODULES))
             return 0
         h = detect()
+        if a.smoke and (a.action not in ("verify", "install") or
+                        (a.action == "install" and "docker" not in a.modules) or
+                        (a.action == "verify" and a.modules == ["compose"])):
+            raise Failure("--smoke 需要 verify 或 install docker。")
         if a.action == "doctor":
             print(json.dumps(asdict(h), ensure_ascii=False, indent=2))
-            for exe in ("docker", "brew", "apt-get", "dnf", "winget", "wsl.exe"):
+            for exe in ("docker", "docker-compose", "colima", "brew", "apt-get", "dnf", "winget", "wsl.exe"):
                 if shutil.which(exe):
                     print(exe, shutil.which(exe))
+            if h.system == "Darwin":
+                print("硬件虚拟化：", optional("/usr/sbin/sysctl", "-n", "kern.hv_support") or "未知")
+                print("可用磁盘 GiB：", shutil.disk_usage(Path.home()).free // 1024**3)
+                if shutil.which("docker"):
+                    print(optional("docker", "context", "ls"))
             try:
                 print("推荐安装后端：", backend(h, a.backend))
             except Failure as exc:
@@ -423,9 +514,11 @@ def main(argv=None):
                                      else "desktop-linux" if h.system in ("Darwin", "Windows") else "default")
             if a.modules not in ([], ["docker"], ["compose"]):
                 raise Failure("verify 仅接受 docker 或 compose。")
-            if not docker_ok(a, verify_only_compose=a.modules == ["compose"]):
+            if not a.dry_run and not docker_ok(a, verify_only_compose=a.modules == ["compose"]):
                 raise Failure(f"验证失败：检查 Docker、Compose、服务状态和上下文 {a.context}。")
-            print("验证通过。")
+            if a.smoke:
+                docker_smoke(Runner(a), h.system == "Darwin" and a.source == "auto")
+            print("验证计划已输出。" if a.dry_run else "验证通过。")
             return 0
         if not a.modules or any(n not in MODULES for n in a.modules):
             raise Failure("请提供有效模块；用 list 查看。")
@@ -442,6 +535,10 @@ def main(argv=None):
         for n in names:
             if n in ("docker", "compose"):
                 install_docker(r, h, choice, n == "compose")
+                if n == "docker" and choice == "colima" and a.context == "colima":
+                    repair_colima_dns(r)
+                if a.smoke and n == "docker":
+                    docker_smoke(r, h.system == "Darwin" and a.source == "auto")
             else:
                 install_tool(r, choice, n)
         return 0

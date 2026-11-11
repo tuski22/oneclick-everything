@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.12'
       - name: Run Python tests
         run: python -m unittest discover -s tests -v
       - name: Check Shell launchers
@@ -27,8 +27,12 @@ jobs:
         run: |
           sh -n install.sh
           sh -n scripts/docker/install.sh
+          sh -n scripts/install-homebrew.sh
           ./install.sh doctor
           ./install.sh list
+          if [ "$RUNNER_OS" = macOS ]; then
+            ./install.sh install docker --dry-run --smoke
+          fi
       - name: Check PowerShell launchers
         if: runner.os == 'Windows'
         shell: pwsh
