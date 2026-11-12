@@ -15,20 +15,17 @@
    ```sh
    sed -n '1,240p' recovery/macos/backup-ai-recovery.sh
    ```
-3. 创建目录并复制模板：
+3. 安装 22:15 的当前登录用户任务；安装器会安全地将绝对路径写入 plist、检查 plist、加载并立即执行一次：
    ```sh
-   mkdir -p "$HOME/AI-Recovery-Backups" "$HOME/AI-Recovery-Notion-Export" "$HOME/Library/LaunchAgents"
-   cp recovery/macos/com.tuski.ai-recovery-backup.plist "$HOME/Library/LaunchAgents/"
+   /bin/sh recovery/macos/install-launchd-backup.sh
    ```
-4. 在复制前，将 plist 中的 `__REPOSITORY_PATH__` 替换成该仓库的**绝对路径**，例如 `/Users/你的用户名/oneclick-everything`。不要使用 `~`。
-5. 加载并立即验证：
+4. 确认日志与归档：
    ```sh
-   launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.tuski.ai-recovery-backup.plist" 2>/dev/null || true
-   launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.tuski.ai-recovery-backup.plist"
-   launchctl kickstart -k "gui/$(id -u)/com.tuski.ai-recovery-backup"
    launchctl print "gui/$(id -u)/com.tuski.ai-recovery-backup"
+   tail -n 50 "$HOME/Library/Logs/ai-recovery-backup.log"
+   ls -lh "$HOME/AI-Recovery-Backups"
    ```
-6. 查看 `$HOME/Library/Logs/ai-recovery-backup.log` 与 `$HOME/AI-Recovery-Backups`。确认出现一个 `.tar.gz` 文件和对应 `.sha256` 文件。
+   必须出现一个 `.tar.gz` 文件和对应的 `.sha256` 文件，才算首次验证成功。
 
 ## 恢复或停用
 
