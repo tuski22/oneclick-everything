@@ -5,12 +5,14 @@
 | 项目 | 结果 | 证据 / 说明 |
 |---|---|---|
 | 复用 Notion 中枢 | 完成 | 已确认「AI跨平台记忆中枢｜总入口」存在，并保留其“按需读取、原始库不迁移、未核实标待确认”的规则 |
+| 建立 Notion 灾备索引 | 完成 | 已创建总入口子页「轻量 AI 灾备恢复索引」，并把 GitHub 恢复入口回链到总入口 |
 | 盘点 GitHub 仓库 | 完成 | 已确认 `tuski22/oneclick-everything` 的 `install.sh`、`install.ps1`、Docker 脚本、README 与 GitHub Actions 检查存在 |
 | 建立统一恢复入口 | 完成 | 新增根目录 `START_HERE.md` |
 | 建立用户恢复教程 | 完成 | 新增根目录 `RESTORE_GUIDE.md` |
 | 建立项目恢复档案 | 完成 | 新增 `recovery/PROJECT_REGISTRY.md`；对未经现场验证的项目明确标“待现场核实” |
-| Mac mini 每日备份配置 | 已准备、待本机加载 | 新增脚本与 launchd 模板；本次环境不是 Mac mini，不能代为加载或验证 |
-| 凭据隔离 | 完成 | 新增 `recovery/SECRETS_AND_ACCESS.md`；不含秘密值 |
+| Mac mini 每日备份配置 | 已准备、待本机加载 | 新增备份脚本、launchd 模板和一键安装脚本；本次环境不是 Mac mini，不能代为加载或验证 |
+| 凭据隔离 | 完成 | 新增 `recovery/SECRETS_AND_ACCESS.md` 并扩展 `.gitignore`；不含秘密值 |
+| 仓库持续检查 | 通过 | GitHub Actions「Installer checks」在当前提交链的最近运行结果为 success（run 43147047110） |
 | 全部聊天备份 / 新模型 / 新数据库 | 未实施（符合范围） | 本方案明确不做 |
 
 ## 待在 Mac mini 上由用户或获授权 AI 完成
